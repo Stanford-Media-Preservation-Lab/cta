@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cta-smpl"
+version = "0.1.0"
+description = "SMPL Create Tar Archive — batch archiving tool for the Stanford Media Preservation Lab"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+    "tqdm>=4.64",
+]
+
+[project.scripts]
+cta = "cta.cta:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cta"]
