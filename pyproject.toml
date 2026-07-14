@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "cta-smpl"
+name = "cta"
 version = "0.1.0"
 description = "SMPL Create Tar Archive — batch archiving tool for the Stanford Media Preservation Lab"
 readme = "README.md"
