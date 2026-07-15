@@ -274,6 +274,100 @@ def print_preflight(content_dirs: list[Path], output_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Pre-flight sidecar completeness check
+# ---------------------------------------------------------------------------
+
+def find_missing_sidecars(content_dir: Path) -> list[Path]:
+    """
+    Return every source file under content_dir that is not referenced by any
+    .md5 sidecar, as paths relative to content_dir.
+
+    .md5 files themselves, .DS_Store, and AppleDouble stubs (._filename) are
+    not source files and are excluded from consideration.
+    """
+    referenced: set[Path] = set()
+    for md5_file in content_dir.rglob("*.md5"):
+        with open(md5_file, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split(None, 1)
+                if len(parts) != 2:
+                    continue
+                rel_path = parts[1].lstrip("*").strip()
+                referenced.add((md5_file.parent / rel_path).resolve())
+
+    missing: list[Path] = []
+    for f in content_dir.rglob("*"):
+        if not f.is_file():
+            continue
+        if f.suffix.lower() == ".md5" or f.name == ".DS_Store" or f.name.startswith("._"):
+            continue
+        if f.resolve() not in referenced:
+            missing.append(f.relative_to(content_dir))
+
+    return sorted(missing)
+
+
+def check_missing_sidecars(content_dirs: list[Path]) -> "dict[str, list[Path]]":
+    """Scan every content directory for source files lacking .md5 sidecar coverage."""
+    missing: dict[str, list[Path]] = {}
+    for cd in content_dirs:
+        files = find_missing_sidecars(cd)
+        if files:
+            missing[cd.name] = files
+    return missing
+
+
+def prompt_missing_sidecars(
+    missing: "dict[str, list[Path]]",
+    session_warnings: "dict[str, list[str]]",
+) -> None:
+    """
+    Report source files with no .md5 sidecar coverage and ask the user whether
+    to stop so they can be created before any processing begins.
+
+    'Y' (default) aborts the run. 'N' records each file in session_warnings
+    so it appears in the end-of-session warnings summary, and the batch
+    proceeds to tarball the files anyway.
+    """
+    total = sum(len(v) for v in missing.values())
+    print()
+    print("  ╔══════════════════════════════════════════════════════════════════╗")
+    print("  ║  [WARN] Missing .md5 sidecar coverage                            ║")
+    print("  ╚══════════════════════════════════════════════════════════════════╝")
+    print(
+        f"  {total} source file(s) across {len(missing)} director"
+        f"{'y' if len(missing) == 1 else 'ies'} have no .md5 sidecar:"
+    )
+    print()
+    for uid, files in missing.items():
+        print(f"    [{uid}]  {len(files)} file(s)")
+        for f in files:
+            print(f"      {f}")
+    print()
+
+    answer = input(
+        "  Some source files are missing sidecar .md5 files. Stop process to "
+        "create them? [Y/n]: "
+    ).strip().lower()
+
+    if answer in ("", "y", "yes"):
+        print("  Stopping — create the missing .md5 sidecars and re-run cta.")
+        sys.exit(1)
+
+    print("  Continuing — missing sidecars will be recorded in the warnings summary.")
+    print()
+
+    for uid, files in missing.items():
+        for f in files:
+            session_warnings.setdefault(uid, []).append(
+                f"[{uid}] No .md5 sidecar for source file: {f}"
+            )
+
+
+# ---------------------------------------------------------------------------
 # Core processing steps
 # ---------------------------------------------------------------------------
 
@@ -849,6 +943,14 @@ def parse_args() -> argparse.Namespace:
             "Create Tar Archive – batch-archive content directories "
             "with MD5 verification and tqdm progress bars."
         ),
+        epilog=(
+            "Naming requirements:\n"
+            "  SOURCE_BATCH_DIR must be named as a 6-digit date code, e.g. 260218 (YYMMDD).\n"
+            "  Every content folder inside it must be named with your institution's unique\n"
+            "  digital object identifier, e.g. zw374zm2412 (optionally suffixed with _1,\n"
+            "  _2, ... for multi-part items)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "parent_dir",
@@ -905,6 +1007,12 @@ def main() -> None:
     # ── Pre-flight table + space check ───────────────────────────────────────
     print_preflight(content_dirs, output_dir)
 
+    # ── Pre-flight sidecar completeness check ────────────────────────────────
+    session_warnings: dict[str, list[str]] = {}
+    missing_sidecars = check_missing_sidecars(content_dirs)
+    if missing_sidecars:
+        prompt_missing_sidecars(missing_sidecars, session_warnings)
+
     # ── Session logger ────────────────────────────────────────────────────────
     session_stamp    = datetime.now().strftime("%Y%m%d_%H%M%S")
     session_log_path = out_log_dir / f"cta_session_{session_stamp}.log"
@@ -918,8 +1026,7 @@ def main() -> None:
     session_log.info("  Directories : %d", len(content_dirs))
 
     # ── Outer session progress bar ─────────────────────────────────────────
-    results:          dict[str, bool]       = {}
-    session_warnings: dict[str, list[str]] = {}
+    results: dict[str, bool] = {}
 
     with logging_redirect_tqdm():
         with tqdm(
