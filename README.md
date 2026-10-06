@@ -1,4 +1,4 @@
-# cta — Create Tar Archive
+# cta
 
 A command-line tool for batch-archiving digital content directories into verified, auditable tar archives. Built for the Stanford Media Preservation Lab.
 
